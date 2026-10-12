@@ -54,7 +54,7 @@
 
 #include "../../libs/vmisc/projectversion.h"
 
-#define VER_INTERNALNAME_STR     "Seamly2D"
+#define VER_INTERNALNAME_STR     "CAD BUILD TEST"
 #define VER_ORIGINALFILENAME_STR "seamly2d.exe"
 #define VER_PRODUCTNAME_STR      VER_INTERNALNAME_STR
 #define VER_FILEDESCRIPTION_STR  "Patternmaking program."
