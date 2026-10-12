@@ -1,0 +1,50 @@
+name: CAD Windows smoke check
+on:
+  push:
+    branches: [cad-smoke-20261013]
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: read
+jobs:
+  windows-smoke:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - name: Fetch verified CAD BUILD TEST artifact
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\cad" | Out-Null
+          gh run download 38277702470 --repo ${{ github.repository }} --name Seamly2D-windows.zip --dir "$env:RUNNER_TEMP\cad"
+          $z = Get-ChildItem "$env:RUNNER_TEMP\cad" -Recurse -Filter '*.zip' | Select-Object -First 1
+          if (-not $z) { throw 'Windows ZIP not found' }
+          Expand-Archive -LiteralPath $z.FullName -DestinationPath "$env:RUNNER_TEMP\cad\inner" -Force
+          $installer = Get-ChildItem "$env:RUNNER_TEMP\cad\inner" -Recurse -Filter 'Seamly2D-installer.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'Installer missing' }
+          Write-Host "Installer SHA256: $((Get-FileHash $installer.FullName -Algorithm SHA256).Hash)"
+          & 'C:\Program Files\7-Zip\7z.exe' x $installer.FullName "-o$env:RUNNER_TEMP\cad\unpacked" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7zip extraction failed: $LASTEXITCODE" }
+          $exe = Get-ChildItem "$env:RUNNER_TEMP\cad\unpacked" -Recurse -Filter 'seamly2d.exe' | Select-Object -First 1
+          if (-not $exe) { throw 'seamly2d.exe not found after extraction' }
+          Write-Host "EXE: $($exe.FullName)"
+          Write-Host "ProductName: $($exe.VersionInfo.ProductName)"
+          Write-Host "InternalName: $($exe.VersionInfo.InternalName)"
+          if ($exe.VersionInfo.ProductName -ne 'CAD BUILD TEST' -and $exe.VersionInfo.InternalName -ne 'CAD BUILD TEST') { throw 'CAD BUILD TEST version info not found' }
+          "CAD_EXE=$($exe.FullName)" >> $env:GITHUB_ENV
+      - name: Launch GUI app without installing or overwriting existing software
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = $env:CAD_EXE
+          $proc = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru
+          try {
+            Start-Sleep -Seconds 12
+            $proc.Refresh()
+            if ($proc.HasExited) { throw "Application exited early with code $($proc.ExitCode)" }
+            Write-Host "PASS: seamly2d.exe remained running for 12s (headless CI smoke test)"
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+          }
