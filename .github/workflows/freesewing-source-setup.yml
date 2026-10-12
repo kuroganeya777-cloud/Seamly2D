@@ -1,0 +1,76 @@
+name: FreeSewing source setup and launch
+on:
+  push:
+    branches: [freesewing-setup-20261013]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  freesewing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    steps:
+      - name: Acquire FreeSewing source
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 https://codeberg.org/freesewing/freesewing.git FreeSewing
+          cd FreeSewing
+          git rev-parse HEAD | tee ../FREESewing_COMMIT.txt
+          ls -la | head -50
+          test -f package.json
+          node -e "let x=require('./package.json'); console.log(JSON.stringify({packageManager:x.packageManager,scripts:x.scripts},null,2))"
+      - name: Setup environment
+        run: |
+          set -euxo pipefail
+          cd FreeSewing
+          node --version
+          npm --version
+          if [ -f pnpm-lock.yaml ]; then
+            corepack enable
+            PM=$(node -p "require('./package.json').packageManager||'pnpm@9.15.0'")
+            corepack prepare "$PM" --activate
+            pnpm install --frozen-lockfile --ignore-scripts
+          elif [ -f yarn.lock ]; then
+            corepack enable
+            PM=$(node -p "require('./package.json').packageManager||'yarn@4.0.0'")
+            corepack prepare "$PM" --activate
+            yarn install --mode=skip-build || yarn install
+          else
+            npm install --ignore-scripts
+          fi
+      - name: Start FreeSewing
+        run: |
+          set -euxo pipefail
+          cd FreeSewing
+          node - <<'JS'
+          const p=require('./package.json')
+          console.log('Available scripts',JSON.stringify(p.scripts))
+          JS
+          if [ -f pnpm-lock.yaml ]; then PM=pnpm; elif [ -f yarn.lock ]; then PM=yarn; else PM=npm; fi
+          if node -e "process.exit(require('./package.json').scripts?.dev ? 0 : 1)"; then
+            timeout 35s $PM run dev >../freesewing-start.log 2>&1 || x=$?
+          elif node -e "process.exit(require('./package.json').scripts?.start ? 0 : 1)"; then
+            timeout 35s $PM run start >../freesewing-start.log 2>&1 || x=$?
+          else
+            echo "NO_START_SCRIPT" | tee ../freesewing-start.log
+            exit 1
+          fi
+          cat ../freesewing-start.log | tail -100
+          if grep -Eqi 'ready|localhost|listening|started server|local:' ../freesewing-start.log; then echo 'APP_STARTED'; else echo 'APP_START_UNVERIFIED'; exit 1; fi
+      - name: Package clean source code
+        if: always()
+        run: |
+          if [ -d FreeSewing ]; then
+            cd FreeSewing
+            git archive --format=zip HEAD -o ../FreeSewing_Source.zip
+          fi
+      - name: Upload source ZIP and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FreeSewing_Source
+          path: |
+            FreeSewing_Source.zip
+            FREESewing_COMMIT.txt
+            freesewing-start.log
+          if-no-files-found: warn
