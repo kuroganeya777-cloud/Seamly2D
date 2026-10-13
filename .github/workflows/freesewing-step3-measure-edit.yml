@@ -118,7 +118,7 @@ jobs:
             await page.waitForTimeout(950)
             rec('Open pattern export control','PASS')
             await snapshot('08-export-menu')
-            for(const format of ['SVG','PDF']){
+            for(const format of ['SVG','PDF','A4 PDF','JSON']){
               const l=page.getByText(format,{exact:true}).first()
               if(await l.count()) await safe('Export '+format,async()=>{
                 const before=report.downloads.length
@@ -130,7 +130,7 @@ jobs:
             }
           })
           await safe('Open save-pattern control',async()=>{
-            const existing=page.getByText('Draft Pattern',{exact:true}).first()
+            const existing=page.getByText('Export Pattern',{exact:true}).first()
             if(await existing.count())await existing.click({timeout:5000})
             const save=page.getByText('Save pattern as...',{exact:true}).first()
             if(await save.count()){
@@ -141,7 +141,7 @@ jobs:
             }else rec('Open save-pattern dialog','NOT_FOUND')
           })
           await safe('Inspect freehand edit settings',async()=>{
-            const nav=page.getByText('Draft Pattern',{exact:true}).first()
+            const nav=page.getByText('Save Pattern',{exact:true}).first()
             if(await nav.count())await nav.click({timeout:5000})
             const edit=page.getByText('Edit settings by hand',{exact:true}).first()
             if(await edit.count()){await edit.click({timeout:5500});await page.waitForTimeout(1000);await snapshot('11-edit-settings');rec('Open settings by hand','PASS')}
