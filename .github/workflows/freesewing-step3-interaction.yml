@@ -1,0 +1,62 @@
+name: FreeSewing step3 real editor interaction
+on:
+  push:
+    branches: [freesewing-step3-ui-20261013]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  editor-interaction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Setup Studio and browser automation
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 https://codeberg.org/freesewing/freesewing.git upstream
+          cp -a upstream/packages/studio/template Studio
+          cd Studio
+          npm install --no-audit --no-fund
+          npm install --no-save --no-audit --no-fund playwright-core
+      - name: Select Uma and interact with actual web editor
+        timeout-minutes: 4
+        run: |
+          mkdir -p evidence
+          cd Studio
+          npm run netstart >../evidence/studio.log 2>&1 &
+          echo $! >../evidence/studio.pid
+          cat > interaction.mjs <<'JS'
+          import {chromium} from 'playwright-core'
+          import fs from 'node:fs'
+          const browser=await chromium.launch({executablePath:'/usr/bin/google-chrome',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']})
+          const page=await browser.newPage({viewport:{width:1440,height:1000},acceptDownloads:true})
+          const log=[]
+          page.on('pageerror',e=>log.push('PAGE_ERROR '+e.message))
+          page.on('console',m=>{if(m.type()==='error')log.push('CONSOLE_ERROR '+m.text())})
+          const url='http://127.0.0.1:3000/editor'
+          let ready=false
+          for(let i=0;i<70;i++){try{let resp=await page.goto(url,{waitUntil:'domcontentloaded',timeout:3000});if(resp?.status()===200){ready=true;break}}catch(e){}await new Promise(r=>setTimeout(r,1000))}
+          if(!ready)throw Error('EDITOR_NOT_REACHABLE')
+          await page.getByRole('button',{name:'uma',exact:true}).first().click()
+          await page.waitForTimeout(7000)
+          const initial={url:page.url(),title:await page.title(),text:(await page.locator('body').innerText()).slice(0,10000),inputs:await page.locator('input').evaluateAll(xs=>xs.map(x=>({type:x.type,name:x.name,placeholder:x.placeholder,value:x.value}))),buttons:await page.locator('button').allTextContents(),links:await page.locator('a').evaluateAll(xs=>xs.map(x=>({text:x.textContent?.trim(),href:x.getAttribute('href')})).filter(x=>x.text)),errors:log}
+          fs.writeFileSync('../evidence/uma-editor-initial.json',JSON.stringify(initial,null,2))
+          await page.screenshot({path:'../evidence/uma-editor-initial.png',fullPage:true})
+          console.log('UMA_EDITOR_INSPECT',JSON.stringify({url:initial.url,title:initial.title,text:initial.text.slice(0,4000),inputs:initial.inputs.slice(0,40),buttons:initial.buttons.slice(0,70),errors:initial.errors}))
+          const names=await page.getByRole('button').allTextContents()
+          const control=names.find(x=>/measurement/i.test(x))||names.find(x=>/size|measure|model/i.test(x))
+          if(control){await page.getByRole('button',{name:control,exact:true}).first().click();await page.waitForTimeout(1500)}
+          const after={url:page.url(),text:(await page.locator('body').innerText()).slice(0,7000),inputs:await page.locator('input').evaluateAll(xs=>xs.map(x=>({type:x.type,name:x.name,value:x.value,placeholder:x.placeholder}))),buttons:await page.locator('button').allTextContents(),errors:log}
+          fs.writeFileSync('../evidence/uma-editor-controls.json',JSON.stringify(after,null,2))
+          await page.screenshot({path:'../evidence/uma-editor-controls.png',fullPage:true})
+          console.log('CONTROL_INSPECT',JSON.stringify({text:after.text.slice(0,2600),inputs:after.inputs.slice(0,40),buttons:after.buttons.slice(0,70),errors:after.errors}))
+          await browser.close()
+          JS
+          node interaction.mjs
+      - name: Save screenshots and interaction proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FreeSewing-Step3-UI-Evidence
+          path: evidence/
+          if-no-files-found: warn
