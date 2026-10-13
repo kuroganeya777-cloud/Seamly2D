@@ -1,0 +1,101 @@
+name: FreeSewing step3 UI editing and export verification
+on:
+  push:
+    branches: [freesewing-step3-ui-20261013]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  step3-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Prepare FreeSewing Studio and Chrome automation
+        timeout-minutes: 8
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 https://codeberg.org/freesewing/freesewing.git upstream
+          git -C upstream rev-parse HEAD | tee source-commit.txt
+          cp -a upstream/packages/studio/template Studio
+          cd Studio
+          npm install --no-audit --no-fund
+          cd ..
+          mkdir -p driver evidence
+          cd driver
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund playwright-core@1.55.1
+          cd ..
+          echo "Chrome path:"
+          command -v google-chrome || command -v chromium || command -v chromium-browser
+          echo "Studio relevant source:"
+          find Studio/src -type f | grep -Ei 'editor|pattern|export|download|measure' | head -50
+      - name: Launch Studio and browser-test Uma editor UI
+        timeout-minutes: 3
+        run: |
+          set -euxo pipefail
+          cd Studio
+          npm run netstart >../evidence/studio.log 2>&1 &
+          echo $! >../studio.pid
+          cd ..
+          for n in $(seq 1 90); do
+            if curl -fsSL --max-time 2 http://127.0.0.1:3000/editor -o /dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsSL --max-time 5 http://127.0.0.1:3000/editor -o /dev/null
+          cat >driver/probe.cjs <<'JS'
+          const {chromium}=require('playwright-core');
+          const fs=require('node:fs');
+          const path=require('node:path');
+          (async()=>{
+            const executablePath=['/usr/bin/google-chrome','/usr/bin/google-chrome-stable','/usr/bin/chromium-browser','/usr/bin/chromium'].find(x=>fs.existsSync(x));
+            if(!executablePath)throw Error('CHROME_NOT_FOUND');
+            const browser=await chromium.launch({executablePath,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
+            const page=await browser.newPage({viewport:{width:1440,height:950},acceptDownloads:true});
+            const errors=[];
+            page.on('pageerror',e=>errors.push(e.message));
+            page.on('console',m=>{if(m.type()==='error')errors.push(m.text().slice(0,240))});
+            const report={executablePath,steps:[],errors};
+            async function snapshot(name){
+              await page.screenshot({path:'../evidence/'+name+'.png',fullPage:false});
+              const data=await page.evaluate(()=>({
+                url:location.href,
+                title:document.title,
+                text:(document.body.innerText||'').slice(0,10000),
+                buttons:Array.from(document.querySelectorAll('button')).map(b=>({text:b.innerText.trim().slice(0,90),title:b.title,aria:b.getAttribute('aria-label')})).slice(0,150),
+                inputs:Array.from(document.querySelectorAll('input,select,textarea')).map(e=>({tag:e.tagName,type:e.type,name:e.name,value:e.value,placeholder:e.placeholder,aria:e.getAttribute('aria-label')})).slice(0,120),
+                links:Array.from(document.querySelectorAll('a')).map(e=>({text:e.innerText.trim().slice(0,75),href:e.getAttribute('href')})).slice(0,80),
+                svgCount:document.querySelectorAll('svg').length
+              }));
+              report.steps.push({name,...data});
+              fs.writeFileSync('../evidence/report.json',JSON.stringify(report,null,2));
+              console.log('SNAPSHOT',name,'URL',data.url,'BUTTONS',JSON.stringify(data.buttons).slice(0,3500),'INPUTS',JSON.stringify(data.inputs).slice(0,3500),'TEXT',data.text.slice(0,1700));
+            }
+            await page.goto('http://127.0.0.1:3000/editor',{waitUntil:'domcontentloaded',timeout:35000});
+            await page.getByText('Uma undies',{exact:true}).waitFor({timeout:30000});
+            await snapshot('01-design-chooser');
+            try {
+              await page.getByText('Uma undies',{exact:true}).click({timeout:15000});
+              await page.waitForTimeout(6000);
+              await snapshot('02-uma-selected');
+              const clickable=await page.getByRole('button',{name:/create|draft|generate|pattern|start/i}).all();
+              console.log('CANDIDATE_ACTION_BUTTONS',clickable.length);
+              if(clickable.length && !report.steps.at(-1).text.toLowerCase().includes('measurements')) {
+                await clickable[0].click({timeout:5000}).catch(e=>console.log('ACTION_CLICK_ERROR',e.message.slice(0,250)));
+                await page.waitForTimeout(3500);
+                await snapshot('03-after-action');
+              }
+            } catch(e) {report.interactionFailure=e.message; await snapshot('02-selection-error');}
+            fs.writeFileSync('../evidence/report.json',JSON.stringify(report,null,2));
+            console.log('STEP3_UI_DISCOVERY_FINISHED');
+            await browser.close();
+          })().catch(e=>{console.error('BROWSER_TEST_ERROR',e);process.exit(1)});
+          JS
+          cd driver
+          node probe.cjs
+      - name: Upload small screenshots and interaction evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FreeSewing-Step3-UI-Evidence
+          path: evidence/
+          if-no-files-found: warn
