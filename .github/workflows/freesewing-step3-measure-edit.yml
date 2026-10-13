@@ -1,0 +1,136 @@
+name: FreeSewing step3 UI measurement change and controls
+on:
+  push:
+    branches: [freesewing-step3-update-20261013]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test-uma-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Prepare official Studio and browser automation
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 https://codeberg.org/freesewing/freesewing.git upstream
+          cp -a upstream/packages/studio/template Studio
+          cd Studio
+          npm install --no-audit --no-fund
+          npm install --no-save --no-audit --no-fund playwright-core
+      - name: Perform real browser measurement update and inspect editing export
+        timeout-minutes: 4
+        run: |
+          mkdir -p evidence
+          cd Studio
+          npm run netstart >../evidence/studio.log 2>&1 &
+          echo $! > ../evidence/studio.pid
+          cat > verify.mjs <<'JS'
+          import {chromium} from 'playwright-core'
+          import fs from 'node:fs'
+          import crypto from 'node:crypto'
+          const dir='../evidence'
+          const report={test:'FreeSewing Uma UI measurement modification and exports',status:'INCOMPLETE',steps:[],snapshots:[],errors:[],downloads:[]}
+          const save=()=>fs.writeFileSync(dir+'/report.json',JSON.stringify(report,null,2))
+          const rec=(name,status,info={})=>{report.steps.push({name,status,...info});console.log('STEP_RESULT',JSON.stringify(report.steps.at(-1)));save()}
+          const safe=async(name,fn)=>{try{return await fn()}catch(e){report.errors.push({name,message:String(e?.message||e).slice(0,1200)});console.log('TEST_ERROR',name,String(e?.message||e).slice(0,400));save();return null}}
+          const browser=await chromium.launch({executablePath:'/usr/bin/google-chrome',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']})
+          const context=await browser.newContext({viewport:{width:1440,height:1000},acceptDownloads:true})
+          const page=await context.newPage()
+          page.on('pageerror',e=>report.errors.push({name:'PAGE_ERROR',message:e.message}))
+          page.on('download',d=>{report.downloads.push({name:d.suggestedFilename(),url:d.url()});console.log('BROWSER_DOWNLOAD',d.suggestedFilename());d.saveAs(dir+'/'+d.suggestedFilename().replace(/[^a-z0-9._-]/ig,'_')).catch(e=>console.log('SAVE_DOWNLOAD_ERROR',e.message))})
+          const snapshot=async(id)=>{
+            const data={id,url:page.url(),title:await page.title(),text:(await page.locator('body').innerText()).slice(0,13000),inputs:await page.locator('input').evaluateAll(xs=>xs.map(x=>({type:x.type,name:x.name,value:x.value,id:x.id,placeholder:x.placeholder,min:x.min,max:x.max,aria:x.getAttribute('aria-label')}))),buttons:await page.locator('button').evaluateAll(xs=>xs.map(x=>({text:x.innerText?.slice(0,160),aria:x.getAttribute('aria-label'),title:x.title}))),links:await page.locator('a').evaluateAll(xs=>xs.map(x=>({text:x.innerText?.slice(0,100),href:x.getAttribute('href')})).filter(x=>x.text))}
+            const ss=page.locator('svg')
+            data.svgCount=await ss.count()
+            data.svgPathCount=await page.locator('svg path').count()
+            data.svgHash=crypto.createHash('sha256').update(await page.locator('svg').evaluateAll(xs=>xs.map(x=>x.outerHTML).join('\n'))).digest('hex')
+            report.snapshots.push(data)
+            fs.writeFileSync(dir+'/'+id+'.json',JSON.stringify(data,null,2))
+            await page.screenshot({path:dir+'/'+id+'.png',fullPage:true,animations:'disabled'})
+            console.log('SNAPSHOT',id,JSON.stringify({url:data.url,svgCount:data.svgCount,svgPathCount:data.svgPathCount,svgHash:data.svgHash,inputs:data.inputs.slice(0,35),buttons:data.buttons.slice(0,65),text:data.text.slice(0,1800)}))
+            save()
+            return data
+          }
+          try{
+          let loaded=false
+          for(let i=0;i<70;i++){try{const r=await page.goto('http://127.0.0.1:3000/editor',{waitUntil:'domcontentloaded',timeout:4000});if(r.status()===200){loaded=true;break}}catch{}await page.waitForTimeout(1000)}
+          if(!loaded)throw Error('Studio /editor HTTP 200 unavailable')
+          await page.getByRole('button',{name:'uma',exact:true}).first().click({timeout:15000})
+          await page.waitForTimeout(4000)
+          await page.getByText("Choose one of FreeSewing's curated measurements sets",{exact:true}).first().click({timeout:10000})
+          await page.waitForTimeout(3500)
+          await page.mouse.click(330,900)
+          await page.waitForTimeout(2500)
+          const has=await page.getByRole('button',{name:'Draft Pattern'}).count()
+          if(!has)throw Error('No Draft Pattern after curated measurements')
+          await page.getByRole('button',{name:'Draft Pattern'}).click()
+          await page.waitForTimeout(6000)
+          const baseline=await snapshot('01-drafted')
+          rec('Studio Uma draft from curated measurements','PASS',{svgPathCount:baseline.svgPathCount})
+          const btn=page.getByRole('button',{name:/measurements updated/i}).first()
+          if(await btn.count()){
+            await btn.click({timeout:10000})
+            await page.waitForTimeout(1100)
+            rec('Open current measurement controls','PASS')
+          }else rec('Open current measurement controls','NOT_FOUND')
+          await snapshot('02-measurements-menu')
+          const manual=page.getByText('Edit measurements by hand',{exact:true}).first()
+          if(await manual.count()){
+            await safe('Open manual edit',async()=>{await manual.click({timeout:6500});await page.waitForTimeout(1000);rec('Open manual body-measurement editor','PASS')})
+          }
+          const controls=await snapshot('03-editing-controls')
+          const nums=controls.inputs.filter(x=>x.type==='number' && Number.isFinite(Number(x.value)) && Number(x.value)>0)
+          let changed=false
+          if(nums.length){
+            const n=nums.find(x=>/waist|seat/i.test(x.name+' '+x.id+' '+x.aria))||nums[0]
+            const idx=controls.inputs.findIndex(x=>x===n || (x.id===n.id&&x.name===n.name&&x.value===n.value))
+            const original=Number(n.value)
+            const updated=original+40
+            await safe('Change numeric measurement',async()=>{
+              const loc=n.id?page.locator('[id="'+n.id+'"]'):n.name?page.locator('input[name="'+n.name+'"]').first():page.locator('input[type=number]').first()
+              await loc.fill(String(updated))
+              await loc.press('Tab')
+              await page.waitForTimeout(900)
+              rec('Change body measurement through UI','PASS',{field:n.name||n.id||'numeric input',before:original,after:updated})
+              changed=true
+            })
+          }else rec('Change body measurement through UI','BLOCKED',{reason:'No numeric measurement inputs visible after opening menu'})
+          const postEdit=await snapshot('04-after-input')
+          if(changed){
+            const draft=page.getByRole('button',{name:'Draft Pattern'}).first()
+            if(await draft.count()) await safe('Redraft after edit',async()=>{await draft.click();await page.waitForTimeout(5500)})
+            const updated=await snapshot('05-redrafted')
+            if(updated.svgPathCount>0 && updated.svgHash!==baseline.svgHash)rec('UI measurement change updates pattern geometry','PASS',{baselinePaths:baseline.svgPathCount,updatedPaths:updated.svgPathCount,baselineSha256:baseline.svgHash,updatedSha256:updated.svgHash})
+            else rec('UI measurement change updates pattern geometry','UNVERIFIED',{baselinePaths:baseline.svgPathCount,updatedPaths:updated.svgPathCount,hashDifferent:baseline.svgHash!==updated.svgHash})
+          }else rec('UI measurement change updates pattern geometry','UNVERIFIED',{reason:'No numeric input updated'})
+          // Inspect edit/export/save controls without guessing that they work
+          let inspected=await snapshot('06-export-options-before')
+          const candidates=inspected.buttons.filter(x=>/download|export|save|pdf|svg|edit|options|settings|core/i.test((x.text||'')+' '+(x.aria||'')+' '+(x.title||'')))
+          console.log('EXPORT_OR_EDIT_BUTTON_CANDIDATES',JSON.stringify(candidates))
+          const rows=[]
+          for(const q of ['Download','Export','Save','PDF','SVG','Uma Options','Core Settings']){
+            const els=page.getByText(q,{exact:true})
+            const count=await els.count()
+            rows.push({label:q,count})
+            if(count && /download|export|save/i.test(q)){
+              await safe('Open '+q,async()=>{
+                await els.first().click({timeout:3500})
+                await page.waitForTimeout(700)
+                await snapshot('07-'+q.toLowerCase())
+              })
+            }
+          }
+          rec('Inspect free-edit/save/PDF/SVG browser controls','INSPECTED',{candidates,labels:rows,downloads:report.downloads})
+          report.status=report.steps.some(x=>x.name==='UI measurement change updates pattern geometry'&&x.status==='PASS')?'MEASUREMENT_REGEN_VERIFIED':'MEASUREMENT_REGEN_UNVERIFIED'
+          }catch(e){report.errors.push({name:'FATAL',message:String(e.stack||e).slice(0,2000)});console.log('FATAL',String(e.stack||e).slice(0,1700))}
+          finally{save();await browser.close();console.log('FINAL_REPORT',JSON.stringify({status:report.status,steps:report.steps,errors:report.errors.map(x=>x.name),downloads:report.downloads}))}
+          JS
+          node verify.mjs
+      - name: Keep screenshot JSON logs and downloads
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Uma-Step3-Measure-Edit-Evidence
+          path: evidence/
+          if-no-files-found: warn
