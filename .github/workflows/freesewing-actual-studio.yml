@@ -18,45 +18,89 @@ jobs:
           test -f upstream/packages/studio/template/scripts/prebuild.mjs
           test -f upstream/packages/studio/template/src/pages/editor.js
           cp -a upstream/packages/studio/template Studio
+          node -p "JSON.stringify(require('./Studio/package.json').scripts)"
       - name: Install Studio dependencies
         timeout-minutes: 7
         run: |
           cd Studio
           npm install --no-audit --no-fund
-      - name: Launch Studio editor
+      - name: Start Studio on explicit IPv4 and validate editor
         timeout-minutes: 3
         run: |
-          set -u
+          set -uo pipefail
           cd Studio
-          npm run start >../studio.log 2>&1 &
-          echo $! >../studio.pid
+          npm run netstart >../studio.log 2>&1 &
+          echo $! > ../studio.pid
           cd ..
+          echo "STARTING_NETSTART_ON_0.0.0.0"
           URL=""
           for i in $(seq 1 90); do
-            if curl --max-time 2 -LfsS http://127.0.0.1:3000/editor -o editor.html 2>/dev/null; then URL=http://127.0.0.1:3000/editor; break; fi
-            if ! kill -0 "$(cat studio.pid)" 2>/dev/null; then break; fi
+            if [ "$i" = 20 ] || [ "$i" = 60 ]; then
+              echo "=== NETWORK_DIAGNOSTICS_ITERATION_$i ==="
+              ss -ltnp | grep -E ':3000|:3001|:5173' || true
+              for endpoint in http://127.0.0.1:3000/ http://localhost:3000/ http://127.0.0.1:3000/editor http://localhost:3000/editor; do
+                curl -sS -o /dev/null --max-time 3 -w "%{http_code} %{remote_ip} %{time_total} $endpoint\n" "$endpoint" || true
+              done
+            fi
+            CODE="$(curl -sS -L -o editor.html -w '%{http_code}' --max-time 4 http://127.0.0.1:3000/editor 2>/dev/null || true)"
+            if [ "$CODE" = 200 ] && [ -s editor.html ]; then
+              URL=http://127.0.0.1:3000/editor
+              break
+            fi
+            if ! kill -0 "$(cat studio.pid)" 2>/dev/null; then echo "PARENT_PROCESS_EXITED"; break; fi
             sleep 1
           done
           echo "EDITOR_URL=$URL" | tee result.txt
-          tail -100 studio.log || true
-          if [ -z "$URL" ]; then echo EDITOR_UNAVAILABLE | tee -a result.txt; exit 1; fi
-          CHROME="$(command -v google-chrome || command -v chromium || true)"
-          if [ -n "$CHROME" ]; then
-            timeout 35s "$CHROME" --headless --no-sandbox --disable-dev-shm-usage --disable-gpu --window-size=1366,900 --virtual-time-budget=8000 --screenshot=editor.png "$URL" >chrome.log 2>&1 || true
-            timeout 30s "$CHROME" --headless --no-sandbox --disable-dev-shm-usage --disable-gpu --virtual-time-budget=8000 --dump-dom "$URL" >editor-dom.html 2>>chrome.log || true
-            grep -oiE 'pattern editor|measurements|freesewing' editor-dom.html | sort | uniq -c | head -10 || true
-          fi
-          echo EDITOR_HTTP_AVAILABLE | tee -a result.txt
-      - name: Upload small evidence
+          echo "=== NETWORK ==="
+          ss -ltnp | head -40 || true
+          echo "=== ROOT_HTTP ==="
+          curl -sS -o root.html --max-time 6 -w 'ROOT_HTTP=%{http_code} remote=%{remote_ip}\n' http://127.0.0.1:3000/ || true
+          echo "=== EDITOR_HTTP ==="
+          curl -sS -o editor-last.html --max-time 6 -w 'EDITOR_HTTP=%{http_code} remote=%{remote_ip}\n' http://127.0.0.1:3000/editor || true
+          echo "=== STUDIO LOG TAIL ==="
+          tail -65 studio.log || true
+          if [ -z "$URL" ]; then echo "EDITOR_NOT_HTTP_200" | tee -a result.txt; exit 1; fi
+          echo "EDITOR_HTTP_200" | tee -a result.txt
+          CHROME="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          echo "CHROME_EXECUTABLE=$CHROME"
+          if [ -z "$CHROME" ]; then echo "BROWSER_MISSING" | tee -a result.txt; exit 1; fi
+          timeout 45s "$CHROME" --headless --no-sandbox --disable-dev-shm-usage --disable-gpu --window-size=1440,900 --virtual-time-budget=12000 --screenshot=editor.png "$URL" >chrome.log 2>&1 || true
+          timeout 45s "$CHROME" --headless --no-sandbox --disable-dev-shm-usage --disable-gpu --virtual-time-budget=12000 --dump-dom "$URL" >editor-dom.html 2>>chrome.log || true
+          python3 - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+          class P(HTMLParser):
+            def __init__(self): super().__init__();self.a=[]
+            def handle_data(self,s):
+              if s.strip():self.a.append(s.strip())
+          p=Path('editor-dom.html')
+          if not p.exists() or not p.stat().st_size:
+            print('BROWSER_RENDER_MISSING')
+            raise SystemExit(1)
+          t=P();t.feed(p.read_text(errors='replace'))
+          s=' | '.join(t.a)
+          print('BROWSER_RENDERED_TEXT:',s[:4000])
+          print('SCREENSHOT_EXISTS:',Path('editor.png').exists())
+          print('EDITOR_TERMS:', {k:s.lower().count(k) for k in ['pattern','measurements','free sewing','freesewing','design','editor']})
+          if not any(k in s.lower() for k in ('pattern','freesewing','design','editor')):
+            print('EDITOR_UI_UNVERIFIED')
+            raise SystemExit(1)
+          if not Path('editor.png').exists(): raise SystemExit(1)
+          print('EDITOR_RENDER_VERIFIED')
+          PY
+          echo "EDITOR_BROWSER_VERIFIED" | tee -a result.txt
+      - name: Upload small validation evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Studio-Launch-Evidence
+          name: Studio-IPV4-Retry-Evidence
           path: |
             source-commit.txt
             studio.log
             result.txt
             editor.html
+            editor-last.html
+            root.html
             editor-dom.html
             editor.png
             chrome.log
