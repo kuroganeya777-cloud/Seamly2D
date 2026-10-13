@@ -119,7 +119,7 @@ jobs:
             rec('Open pattern export control','PASS')
             await snapshot('08-export-menu')
             for(const format of ['SVG','PDF','A4 PDF','JSON']){
-              const l=page.getByText(format,{exact:true}).first()
+              const l=page.getByRole('button',{name:format,exact:true}).first()
               if(await l.count()) await safe('Export '+format,async()=>{
                 const before=report.downloads.length
                 await l.click({timeout:6500})
