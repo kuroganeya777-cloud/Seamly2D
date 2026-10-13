@@ -1,0 +1,74 @@
+name: FreeSewing Studio UI check
+on:
+  push:
+    branches:
+      - freesewing-editor-check-20261013
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  studio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Acquire FreeSewing and inspect Studio
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 https://codeberg.org/freesewing/freesewing.git FreeSewing
+          cd FreeSewing
+          git rev-parse HEAD > ../source-commit.txt
+          node -e "let p=require('./package.json');console.log('ROOT SCRIPTS',p.scripts)"
+          node -e "let p=require('./sites/studio/package.json');console.log('STUDIO SCRIPTS',p.scripts)"
+      - name: Install project environment
+        run: |
+          cd FreeSewing
+          npm install --ignore-scripts --no-audit --no-fund
+      - name: Launch Studio and capture rendered screen
+        timeout-minutes: 4
+        run: |
+          set -u
+          cd FreeSewing
+          npm run studio > ../studio.log 2>&1 &
+          echo $! > ../studio.pid
+          cd ..
+          URL=""
+          for i in $(seq 1 105); do
+            for port in 3000 3001 4000 5000 5173 5174 8080; do
+              if curl -LfsS --max-time 1 "http://127.0.0.1:$port/" -o studio-http.html 2>/dev/null; then
+                URL="http://127.0.0.1:$port/"
+                break
+              fi
+            done
+            if [ -n "$URL" ]; then break; fi
+            if ! kill -0 "$(cat studio.pid)" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          echo "$URL" > studio-url.txt
+          echo "STUDIO_URL=$URL"
+          tail -100 studio.log || true
+          if [ -z "$URL" ]; then echo STUDIO_HTTP_UNAVAILABLE; exit 1; fi
+          CHROME="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          echo "BROWSER_EXECUTABLE=$CHROME"
+          if [ -n "$CHROME" ]; then
+            timeout 50s "$CHROME" --headless --no-sandbox --disable-gpu --disable-dev-shm-usage --window-size=1440,900 --virtual-time-budget=12000 --screenshot=studio.png "$URL" >chrome.log 2>&1 || true
+            timeout 35s "$CHROME" --headless --no-sandbox --disable-gpu --disable-dev-shm-usage --virtual-time-budget=12000 --dump-dom "$URL" >studio-rendered.html 2>>chrome.log || true
+            if [ -s studio-rendered.html ]; then
+              grep -oE '<title>[^<]+' studio-rendered.html | head -2 || true
+              grep -oEi 'pattern|design|measurements|freesewing|svg' studio-rendered.html | sort | uniq -c | head -20 || true
+            fi
+          fi
+          echo STUDIO_HTTP_AVAILABLE
+      - name: Upload small verification evidence only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Studio-Evidence
+          path: |
+            source-commit.txt
+            studio.log
+            studio-url.txt
+            studio-http.html
+            studio-rendered.html
+            studio.png
+            chrome.log
+          if-no-files-found: warn
