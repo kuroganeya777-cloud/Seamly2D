@@ -27,7 +27,7 @@ jobs:
           console.log('MODEL_EXPORT_NAMES',Object.keys(models))
           const Uma=uma.Uma||uma.default
           if(typeof Uma!=='function')throw new Error('UMA_CONSTRUCTOR_NOT_FOUND')
-          const original=models.womenswear40 || models.womenswear?.womenswear40 || models.womenswear?.[40]
+          const original=models.cisFemaleAdult40
           if(!original || !original.waist || !original.seat)throw new Error('WOMENSWEAR40_TEST_MODEL_NOT_FOUND')
           const base={...original}
           const variant={...base,waist:base.waist+40,seat:base.seat+40}
