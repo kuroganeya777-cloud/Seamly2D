@@ -45,6 +45,8 @@ jobs:
           console.log('UMA_EDITOR_INSPECT',JSON.stringify({url:initial.url,title:initial.title,text:initial.text.slice(0,4000),inputs:initial.inputs.slice(0,40),buttons:initial.buttons.slice(0,70),errors:initial.errors}))
           await page.getByText("Choose one of FreeSewing's curated measurements sets",{exact:true}).first().click({timeout:10000})
           await page.waitForTimeout(5000)
+          await page.mouse.click(330,900)
+          await page.waitForTimeout(6500)
           const after={url:page.url(),text:(await page.locator('body').innerText()).slice(0,7000),inputs:await page.locator('input').evaluateAll(xs=>xs.map(x=>({type:x.type,name:x.name,value:x.value,placeholder:x.placeholder}))),buttons:await page.locator('button').allTextContents(),errors:log}
           fs.writeFileSync('../evidence/uma-editor-controls.json',JSON.stringify(after,null,2))
           await page.screenshot({path:'../evidence/uma-editor-controls.png',fullPage:true})
