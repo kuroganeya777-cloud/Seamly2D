@@ -12,15 +12,15 @@ jobs:
     steps:
       - name: Install official FreeSewing drafting modules
         run: |
-          mkdir -p drafting evidence
+          mkdir -p evidence
+          git clone --depth 1 https://codeberg.org/freesewing/freesewing.git drafting
           cd drafting
-          npm init -y >/dev/null
-          npm install --no-audit --no-fund @freesewing/uma @freesewing/models
+          npm install --ignore-scripts --no-audit --no-fund
       - name: Draft Uma underwear twice from numerical body measurements
         run: |
           cat > drafting/test.mjs <<'JS'
-          import * as uma from '@freesewing/uma'
-          import * as models from '@freesewing/models'
+          import * as uma from './designs/uma/src/index.mjs'
+          import * as models from './packages/models/src/index.mjs'
           import { writeFileSync } from 'node:fs'
           import { createHash } from 'node:crypto'
           console.log('UMA_EXPORT_NAMES',Object.keys(uma))
