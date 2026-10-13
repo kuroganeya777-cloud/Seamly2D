@@ -85,15 +85,15 @@ jobs:
             await safe('Open manual edit',async()=>{await manual.click({timeout:6500});await page.waitForTimeout(1000);rec('Open manual body-measurement editor','PASS')})
           }
           const controls=await snapshot('03-editing-controls')
-          const nums=controls.inputs.filter(x=>x.type==='number' && Number.isFinite(Number(x.value)) && Number(x.value)>0)
+          const nums=controls.inputs.filter(x=>(x.type==='number'||x.type==='text') && /^edit-(waist|seat|waistToSeat|waistToUpperLeg)$/.test(x.id) && Number.isFinite(Number(x.value)) && Number(x.value)>0)
           let changed=false
           if(nums.length){
             const n=nums.find(x=>/waist|seat/i.test(x.name+' '+x.id+' '+x.aria))||nums[0]
             const idx=controls.inputs.findIndex(x=>x===n || (x.id===n.id&&x.name===n.name&&x.value===n.value))
             const original=Number(n.value)
-            const updated=original+40
+            const updated=original+4
             await safe('Change numeric measurement',async()=>{
-              const loc=n.id?page.locator('[id="'+n.id+'"]'):n.name?page.locator('input[name="'+n.name+'"]').first():page.locator('input[type=number]').first()
+              const loc=n.id?page.locator('[id="'+n.id+'"]'):n.name?page.locator('input[name="'+n.name+'"]').first():page.locator('input[id^=edit-]').first()
               await loc.fill(String(updated))
               await loc.press('Tab')
               await page.waitForTimeout(900)
