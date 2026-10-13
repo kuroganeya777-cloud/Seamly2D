@@ -1,0 +1,57 @@
+name: FreeSewing measured Uma pattern actual SVG test
+on:
+  push:
+    branches: [freesewing-measure-test-20261013]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  measured-pattern:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install official FreeSewing drafting modules
+        run: |
+          mkdir -p drafting evidence
+          cd drafting
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund @freesewing/uma @freesewing/models
+      - name: Draft Uma underwear twice from numerical body measurements
+        run: |
+          cat > drafting/test.mjs <<'JS'
+          import * as uma from '@freesewing/uma'
+          import * as models from '@freesewing/models'
+          import { writeFileSync } from 'node:fs'
+          import { createHash } from 'node:crypto'
+          console.log('UMA_EXPORT_NAMES',Object.keys(uma))
+          console.log('MODEL_EXPORT_NAMES',Object.keys(models))
+          const Uma=uma.Uma||uma.default
+          if(typeof Uma!=='function')throw new Error('UMA_CONSTRUCTOR_NOT_FOUND')
+          const original=models.womenswear40 || models.womenswear?.womenswear40 || models.womenswear?.[40]
+          if(!original || !original.waist || !original.seat)throw new Error('WOMENSWEAR40_TEST_MODEL_NOT_FOUND')
+          const base={...original}
+          const variant={...base,waist:base.waist+40,seat:base.seat+40}
+          const results=[]
+          for(const [id,measurements] of [['base',base],['changed',variant]]) {
+            console.log('INPUT_MEASUREMENTS_MM',id,JSON.stringify({waist:measurements.waist,seat:measurements.seat,waistToSeat:measurements.waistToSeat,waistToUpperLeg:measurements.waistToUpperLeg}))
+            const p=new Uma({measurements,sa:10})
+            const draft=p.draft()
+            const rendered=typeof draft?.render==='function'?draft.render():p.render()
+            const svg=typeof rendered==='string'?rendered:typeof rendered?.svg==='string'?rendered.svg:null
+            if(!svg || !svg.includes('<svg') || !svg.includes('<path'))throw new Error('SVG_NOT_GENERATED_'+id)
+            writeFileSync('../evidence/uma-'+id+'.svg',svg)
+            results.push({id,bytes:Buffer.byteLength(svg),pathCount:(svg.match(/<path\b/g)||[]).length,sha256:createHash('sha256').update(svg).digest('hex'),measurements:{waist:measurements.waist,seat:measurements.seat,waistToSeat:measurements.waistToSeat,waistToUpperLeg:measurements.waistToUpperLeg}})
+          }
+          if(results[0].sha256===results[1].sha256)throw new Error('PATTERN_UNCHANGED_AFTER_MEASUREMENT_CHANGE')
+          writeFileSync('../evidence/report.json',JSON.stringify({status:'PASSED',pattern:'FreeSewing Uma',results},null,2))
+          console.log('PATTERN_GENERATION_SUCCESS',JSON.stringify(results))
+          JS
+          cd drafting
+          node test.mjs
+      - name: Store generated SVGs and proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Uma-Measured-Pattern-Output
+          path: evidence/
+          if-no-files-found: warn
