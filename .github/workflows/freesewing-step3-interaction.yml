@@ -43,9 +43,8 @@ jobs:
           fs.writeFileSync('../evidence/uma-editor-initial.json',JSON.stringify(initial,null,2))
           await page.screenshot({path:'../evidence/uma-editor-initial.png',fullPage:true})
           console.log('UMA_EDITOR_INSPECT',JSON.stringify({url:initial.url,title:initial.title,text:initial.text.slice(0,4000),inputs:initial.inputs.slice(0,40),buttons:initial.buttons.slice(0,70),errors:initial.errors}))
-          const names=await page.getByRole('button').allTextContents()
-          const control=names.find(x=>/measurement/i.test(x))||names.find(x=>/size|measure|model/i.test(x))
-          if(control){await page.getByRole('button',{name:control,exact:true}).first().click();await page.waitForTimeout(1500)}
+          await page.getByText("Choose one of FreeSewing's curated measurements sets",{exact:true}).first().click({timeout:10000})
+          await page.waitForTimeout(5000)
           const after={url:page.url(),text:(await page.locator('body').innerText()).slice(0,7000),inputs:await page.locator('input').evaluateAll(xs=>xs.map(x=>({type:x.type,name:x.name,value:x.value,placeholder:x.placeholder}))),buttons:await page.locator('button').allTextContents(),errors:log}
           fs.writeFileSync('../evidence/uma-editor-controls.json',JSON.stringify(after,null,2))
           await page.screenshot({path:'../evidence/uma-editor-controls.png',fullPage:true})
