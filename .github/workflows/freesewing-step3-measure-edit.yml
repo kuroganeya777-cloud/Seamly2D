@@ -70,7 +70,7 @@ jobs:
           rec('Studio Uma draft from curated measurements','PASS',{svgPathCount:baseline.svgPathCount})
           await safe('Expand Draft Pattern menu',async()=>{await page.getByText('Draft Pattern',{exact:true}).first().click({timeout:5000});await page.waitForTimeout(500);rec('Expand Draft Pattern navigation','PASS')})
           await snapshot('01b-draft-menu')
-          const measureLink=page.getByText('Measurements',{exact:true}).first()
+          const measureLink=page.getByText('Pattern Measurements',{exact:true}).first()
           if(await measureLink.count()) await safe('Open measurements view',async()=>{await measureLink.click({timeout:5000});await page.waitForTimeout(1300);rec('Open measurements view','PASS')})
           await snapshot('01c-after-measure-nav')
           const btn=page.getByRole('button',{name:/measurements updated/i}).first()
