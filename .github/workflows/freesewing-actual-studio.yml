@@ -1,0 +1,63 @@
+name: FreeSewing actual Studio launch
+on:
+  push:
+    branches: [freesewing-studio-actual-20261013]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  actual-studio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Prepare official Studio template
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 https://codeberg.org/freesewing/freesewing.git upstream
+          git -C upstream rev-parse HEAD > source-commit.txt
+          test -f upstream/packages/studio/template/scripts/prebuild.mjs
+          test -f upstream/packages/studio/template/src/pages/editor.js
+          cp -a upstream/packages/studio/template Studio
+      - name: Install Studio dependencies
+        timeout-minutes: 7
+        run: |
+          cd Studio
+          npm install --no-audit --no-fund
+      - name: Launch Studio editor
+        timeout-minutes: 3
+        run: |
+          set -u
+          cd Studio
+          npm run start >../studio.log 2>&1 &
+          echo $! >../studio.pid
+          cd ..
+          URL=""
+          for i in $(seq 1 90); do
+            if curl --max-time 2 -LfsS http://127.0.0.1:3000/editor -o editor.html 2>/dev/null; then URL=http://127.0.0.1:3000/editor; break; fi
+            if ! kill -0 "$(cat studio.pid)" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          echo "EDITOR_URL=$URL" | tee result.txt
+          tail -100 studio.log || true
+          if [ -z "$URL" ]; then echo EDITOR_UNAVAILABLE | tee -a result.txt; exit 1; fi
+          CHROME="$(command -v google-chrome || command -v chromium || true)"
+          if [ -n "$CHROME" ]; then
+            timeout 35s "$CHROME" --headless --no-sandbox --disable-dev-shm-usage --disable-gpu --window-size=1366,900 --virtual-time-budget=8000 --screenshot=editor.png "$URL" >chrome.log 2>&1 || true
+            timeout 30s "$CHROME" --headless --no-sandbox --disable-dev-shm-usage --disable-gpu --virtual-time-budget=8000 --dump-dom "$URL" >editor-dom.html 2>>chrome.log || true
+            grep -oiE 'pattern editor|measurements|freesewing' editor-dom.html | sort | uniq -c | head -10 || true
+          fi
+          echo EDITOR_HTTP_AVAILABLE | tee -a result.txt
+      - name: Upload small evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Studio-Launch-Evidence
+          path: |
+            source-commit.txt
+            studio.log
+            result.txt
+            editor.html
+            editor-dom.html
+            editor.png
+            chrome.log
+          if-no-files-found: warn
